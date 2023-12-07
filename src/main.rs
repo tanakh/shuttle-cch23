@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use axum::{
     extract::Path,
     http::StatusCode,
@@ -5,7 +7,9 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use serde::Deserialize;
+use axum_extra::extract::CookieJar;
+use base64::Engine;
+use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::json;
 
 async fn hello_world() -> &'static str {
@@ -49,7 +53,7 @@ async fn day4_task1(Json(payload): Json<Vec<Reindeer>>) -> impl IntoResponse {
     format!("{sum}")
 }
 
-async fn day4_task2(Json(payload): Json<Vec<Reindeer>>) -> Json<serde_json::Value> {
+async fn day4_task2(Json(payload): Json<Vec<Reindeer>>) -> impl IntoResponse {
     let fastest = payload
         .iter()
         .max_by(|a, b| a.speed.partial_cmp(&b.speed).unwrap())
@@ -75,6 +79,50 @@ async fn day4_task2(Json(payload): Json<Vec<Reindeer>>) -> Json<serde_json::Valu
     }))
 }
 
+async fn day6(body: String) -> impl IntoResponse {
+    let elf_on_a_shelf = body.match_indices("elf on a shelf").count();
+
+    Json(json!({
+        "elf": body.match_indices("elf").count(),
+        "elf on a shelf": elf_on_a_shelf,
+        "shelf with no elf on it": body.match_indices("shelf").count() - elf_on_a_shelf,
+    }))
+}
+
+fn get_value_from_cookie<T: DeserializeOwned>(jar: &CookieJar, name: &str) -> Option<T> {
+    let s = jar.get(name)?.value();
+    let decoded = base64::prelude::BASE64_STANDARD.decode(s).ok()?;
+    let decoded = String::from_utf8_lossy(&decoded);
+    Some(serde_json::from_str(&decoded).ok()?)
+}
+
+async fn day7_task1(jar: CookieJar) -> impl IntoResponse {
+    let input = get_value_from_cookie::<serde_json::Value>(&jar, "recipe").unwrap();
+    Json(input)
+}
+
+async fn day7_task2_3(jar: CookieJar) -> impl IntoResponse {
+    let input =
+        get_value_from_cookie::<HashMap<String, HashMap<String, i64>>>(&jar, "recipe").unwrap();
+
+    let recipe = &input["recipe"];
+    let mut pantry = input["pantry"].clone();
+
+    let mut cookies = i64::MAX;
+
+    for (ingred, amount) in recipe {
+        cookies = cookies.min(pantry.get(ingred).unwrap_or(&0) / amount);
+    }
+
+    for (ingred, amount) in recipe {
+        if amount * cookies > 0 {
+            *pantry.get_mut(ingred).unwrap() -= amount * cookies;
+        }
+    }
+
+    Json(json!({"cookies": cookies, "pantry": pantry}))
+}
+
 #[shuttle_runtime::main]
 async fn main() -> shuttle_axum::ShuttleAxum {
     let router = Router::new()
@@ -82,6 +130,9 @@ async fn main() -> shuttle_axum::ShuttleAxum {
         .route("/-1/error", get(error))
         .route("/4/strength", post(day4_task1))
         .route("/4/contest", post(day4_task2))
+        .route("/6", post(day6))
+        .route("/7/decode", get(day7_task1))
+        .route("/7/bake", get(day7_task2_3))
         .route("/", get(hello_world));
     Ok(router.into())
 }
