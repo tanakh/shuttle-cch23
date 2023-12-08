@@ -102,19 +102,19 @@ async fn day7_task1(jar: CookieJar) -> impl IntoResponse {
 }
 
 async fn day7_task2_3(jar: CookieJar) -> impl IntoResponse {
-    let input =
+    let mut input =
         get_value_from_cookie::<HashMap<String, HashMap<String, i64>>>(&jar, "recipe").unwrap();
 
-    let recipe = &input["recipe"];
-    let mut pantry = input["pantry"].clone();
+    let recipe = std::mem::take(input.get_mut("recipe").unwrap());
+    let mut pantry = std::mem::take(input.get_mut("pantry").unwrap());
 
     let mut cookies = i64::MAX;
 
-    for (ingred, amount) in recipe {
+    for (ingred, amount) in &recipe {
         cookies = cookies.min(pantry.get(ingred).unwrap_or(&0) / amount);
     }
 
-    for (ingred, amount) in recipe {
+    for (ingred, amount) in &recipe {
         if amount * cookies > 0 {
             *pantry.get_mut(ingred).unwrap() -= amount * cookies;
         }
