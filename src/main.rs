@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use axum::{
     extract::Path,
     http::StatusCode,
-    response::IntoResponse,
+    response::{IntoResponse, Result},
     routing::{get, post},
     Json, Router,
 };
@@ -123,6 +123,33 @@ async fn day7_task2_3(jar: CookieJar) -> impl IntoResponse {
     Json(json!({"cookies": cookies, "pantry": pantry}))
 }
 
+async fn pokeapi(id: u64) -> Result<HashMap<String, serde_json::Value>> {
+    Ok(
+        reqwest::get(format!("https://pokeapi.co/api/v2/pokemon/{id}/"))
+            .await
+            .map_err(|_| "pokeapi error")?
+            .json::<HashMap<String, serde_json::Value>>()
+            .await
+            .map_err(|_| "invalid json")?,
+    )
+}
+
+async fn day8_task1(Path(id): Path<u64>) -> Result<impl IntoResponse> {
+    let pokemon = pokeapi(id).await?;
+    let weight = pokemon.get("weight").unwrap().as_u64().unwrap();
+    Ok(format!("{}", weight as f64 / 10.0))
+}
+
+async fn day8_task2(Path(id): Path<u64>) -> Result<impl IntoResponse> {
+    let pokemon = pokeapi(id).await?;
+    let weight = pokemon.get("weight").unwrap().as_u64().unwrap();
+    let h = 10.0_f64;
+    let g = 9.825;
+    let v = (2.0 * g * h).sqrt();
+    let f = weight as f64 / 10.0 * v;
+    Ok(format!("{f:.12}"))
+}
+
 #[shuttle_runtime::main]
 async fn main() -> shuttle_axum::ShuttleAxum {
     let router = Router::new()
@@ -133,6 +160,8 @@ async fn main() -> shuttle_axum::ShuttleAxum {
         .route("/6", post(day6))
         .route("/7/decode", get(day7_task1))
         .route("/7/bake", get(day7_task2_3))
+        .route("/8/weight/:id", get(day8_task1))
+        .route("/8/drop/:id", get(day8_task2))
         .route("/", get(hello_world));
     Ok(router.into())
 }
