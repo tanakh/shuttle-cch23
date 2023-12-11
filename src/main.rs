@@ -1,7 +1,7 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, io::Cursor};
 
 use axum::{
-    extract::Path,
+    extract::{Multipart, Path},
     http::StatusCode,
     response::{IntoResponse, Result},
     routing::{get, post},
@@ -155,6 +155,41 @@ async fn day8_task2(Path(id): Path<u64>) -> Result<impl IntoResponse> {
     Ok(format!("{f:.12}"))
 }
 
+async fn day11_task2(mut multipart: Multipart) -> Result<impl IntoResponse> {
+    while let Some(field) = multipart.next_field().await? {
+        if field.name() != Some("image") {
+            continue;
+        }
+
+        let bytes = field.bytes().await?;
+        let mut reader = image::io::Reader::new(Cursor::new(bytes));
+        reader.set_format(image::ImageFormat::Png);
+
+        let image = reader.decode().map_err(|e| format!("{e:?}"))?;
+        let image = image
+            .as_rgb8()
+            .ok_or_else(|| format!("unsupported format"))?;
+
+        let mut red_pixels = 0;
+        for y in 0..image.height() {
+            for x in 0..image.width() {
+                let pixel = image.get_pixel(x, y);
+                let r = pixel[0] as u32;
+                let g = pixel[1] as u32;
+                let b = pixel[2] as u32;
+
+                if r > g + b {
+                    red_pixels += 1;
+                }
+            }
+        }
+
+        return Ok(format!("{red_pixels}"));
+    }
+
+    Err("no image found")?
+}
+
 #[shuttle_runtime::main]
 async fn main() -> shuttle_axum::ShuttleAxum {
     let router = Router::new()
@@ -167,6 +202,8 @@ async fn main() -> shuttle_axum::ShuttleAxum {
         .route("/7/bake", get(day7_task2_3))
         .route("/8/weight/:id", get(day8_task1))
         .route("/8/drop/:id", get(day8_task2))
+        .nest_service("/11/assets", tower_http::services::ServeDir::new("assets"))
+        .route("/11/red_pixels", post(day11_task2))
         .route("/", get(hello_world));
     Ok(router.into())
 }
