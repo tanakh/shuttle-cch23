@@ -168,7 +168,7 @@ async fn day11_task2(mut multipart: Multipart) -> Result<impl IntoResponse> {
         let image = reader.decode().map_err(|e| format!("{e:?}"))?;
         let image = image
             .as_rgb8()
-            .ok_or_else(|| format!("unsupported format"))?;
+            .ok_or_else(|| format!("unsupported color format"))?;
 
         let mut red_pixels = 0;
         for y in 0..image.height() {
