@@ -80,12 +80,15 @@ async fn day4_task2(Json(payload): Json<Vec<Reindeer>>) -> impl IntoResponse {
 }
 
 async fn day6(body: String) -> impl IntoResponse {
-    let elf_on_a_shelf = body.match_indices("elf on a shelf").count();
+    let count =
+        |s: &str, pat: &str| -> usize { (0..s.len()).filter(|i| s[*i..].starts_with(pat)).count() };
+
+    let elf_on_a_shelf = count(&body, "elf on a shelf");
 
     Json(json!({
-        "elf": body.match_indices("elf").count(),
+        "elf": count(&body, "elf"),
         "elf on a shelf": elf_on_a_shelf,
-        "shelf with no elf on it": body.match_indices("shelf").count() - elf_on_a_shelf,
+        "shelf with no elf on it": count(&body, "shelf") - elf_on_a_shelf,
     }))
 }
 
@@ -111,7 +114,9 @@ async fn day7_task2_3(jar: CookieJar) -> impl IntoResponse {
     let mut cookies = i64::MAX;
 
     for (ingred, amount) in &recipe {
-        cookies = cookies.min(pantry.get(ingred).unwrap_or(&0) / amount);
+        if *amount != 0 {
+            cookies = cookies.min(pantry.get(ingred).unwrap_or(&0) / amount);
+        }
     }
 
     for (ingred, amount) in &recipe {
@@ -153,8 +158,8 @@ async fn day8_task2(Path(id): Path<u64>) -> Result<impl IntoResponse> {
 #[shuttle_runtime::main]
 async fn main() -> shuttle_axum::ShuttleAxum {
     let router = Router::new()
-        .route("/1/*nums", get(day1))
         .route("/-1/error", get(error))
+        .route("/1/*nums", get(day1))
         .route("/4/strength", post(day4_task1))
         .route("/4/contest", post(day4_task2))
         .route("/6", post(day6))
