@@ -1,7 +1,11 @@
-use std::{collections::HashMap, io::Cursor};
+use std::{
+    collections::HashMap,
+    io::Cursor,
+    sync::{Arc, RwLock},
+};
 
 use axum::{
-    extract::{Multipart, Path},
+    extract::{Multipart, Path, State},
     http::StatusCode,
     response::{IntoResponse, Result},
     routing::{get, post},
@@ -190,8 +194,94 @@ async fn day11_task2(mut multipart: Multipart) -> Result<impl IntoResponse> {
     Err("no image found")?
 }
 
+async fn day12_task1_post(State(state): State<Arc<RwLock<AppState>>>, Path(key): Path<String>) {
+    let mut lock = state.write().unwrap();
+    lock.day12.insert(key, time::Instant::now());
+}
+
+async fn day12_task1_get(
+    State(state): State<Arc<RwLock<AppState>>>,
+    Path(key): Path<String>,
+) -> Result<impl IntoResponse> {
+    let lock = state.read().unwrap();
+
+    if let Some(time) = lock.day12.get(&key) {
+        Ok(format!(
+            "{:?}",
+            time.elapsed().as_seconds_f64().round() as i64
+        ))
+    } else {
+        Err("key not found")?
+    }
+}
+
+async fn day12_task2(Json(ulids): Json<Vec<String>>) -> Result<impl IntoResponse> {
+    let ret = ulids
+        .into_iter()
+        .map(|s| -> Result<_> {
+            let ulid = ulid::Ulid::from_string(&s).map_err(|e| format!("{e}"))?;
+            Ok(uuid::Uuid::from_u128(ulid.0))
+        })
+        .rev()
+        .collect::<Result<Vec<uuid::Uuid>>>()?;
+    Ok(Json(ret))
+}
+
+async fn day12_task3(
+    Path(weekday): Path<String>,
+    Json(ulids): Json<Vec<String>>,
+) -> Result<impl IntoResponse> {
+    let weekday: u8 = weekday.parse().map_err(|_| "invalid weekday")?;
+
+    let mut christmas_eve = 0;
+    let mut weekday_cnt = 0;
+    let mut in_the_future = 0;
+    let mut lsb_is_1 = 0;
+
+    for s in ulids {
+        let ulid = ulid::Ulid::from_string(&s).map_err(|e| format!("{e}"))?;
+        let ts = ulid.datetime();
+        let epoch = ts
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .map_err(|_| "invalid timestamp")?;
+        let dt = time::OffsetDateTime::from_unix_timestamp_nanos(epoch.as_nanos() as i128)
+            .map_err(|e| format!("{e}"))?;
+        eprintln!("{dt:?}");
+
+        if dt.month() as u8 == 12 && dt.day() == 24 {
+            christmas_eve += 1;
+        }
+
+        if dt.weekday().number_days_from_monday() == weekday {
+            weekday_cnt += 1;
+        }
+
+        if dt > time::OffsetDateTime::now_utc() {
+            in_the_future += 1;
+        }
+
+        if ulid.0 & 1 == 1 {
+            lsb_is_1 += 1;
+        }
+    }
+
+    Ok(Json(json!({
+        "christmas eve": christmas_eve,
+        "weekday": weekday_cnt,
+        "in the future": in_the_future,
+        "LSB is 1": lsb_is_1,
+    })))
+}
+
+#[derive(Default)]
+struct AppState {
+    day12: HashMap<String, time::Instant>,
+}
+
 #[shuttle_runtime::main]
 async fn main() -> shuttle_axum::ShuttleAxum {
+    let shared_state = Arc::new(RwLock::new(AppState::default()));
+
     let router = Router::new()
         .route("/-1/error", get(error))
         .route("/1/*nums", get(day1))
@@ -204,6 +294,11 @@ async fn main() -> shuttle_axum::ShuttleAxum {
         .route("/8/drop/:id", get(day8_task2))
         .nest_service("/11/assets", tower_http::services::ServeDir::new("assets"))
         .route("/11/red_pixels", post(day11_task2))
-        .route("/", get(hello_world));
+        .route("/12/save/:key", post(day12_task1_post))
+        .route("/12/load/:key", get(day12_task1_get))
+        .route("/12/ulids", post(day12_task2))
+        .route("/12/ulids/:weekday", post(day12_task3))
+        .route("/", get(hello_world))
+        .with_state(shared_state);
     Ok(router.into())
 }
