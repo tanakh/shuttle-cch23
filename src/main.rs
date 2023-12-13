@@ -208,7 +208,7 @@ async fn day12_task1_get(
     if let Some(time) = lock.day12.get(&key) {
         Ok(format!(
             "{:?}",
-            time.elapsed().as_seconds_f64().round() as i64
+            time.elapsed().as_seconds_f64().floor() as i64
         ))
     } else {
         Err("key not found")?
@@ -246,7 +246,6 @@ async fn day12_task3(
             .map_err(|_| "invalid timestamp")?;
         let dt = time::OffsetDateTime::from_unix_timestamp_nanos(epoch.as_nanos() as i128)
             .map_err(|e| format!("{e}"))?;
-        eprintln!("{dt:?}");
 
         if dt.month() as u8 == 12 && dt.day() == 24 {
             christmas_eve += 1;
