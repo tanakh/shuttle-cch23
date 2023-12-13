@@ -284,15 +284,15 @@ async fn day13_task1(State(pool): State<Pool>) -> Result<String> {
 }
 
 async fn day13_task2_reset(State(pool): State<Pool>) -> Result<impl IntoResponse> {
-    sqlx::migrate!()
+    let migrator = sqlx::migrate!();
+    migrator
         .undo(&pool.pool, 0)
         .await
         .map_err(|e| format!("{e:?}"))?;
-    sqlx::migrate!()
+    migrator
         .run(&pool.pool)
         .await
         .map_err(|e| format!("{e:?}"))?;
-
     Ok(())
 }
 
