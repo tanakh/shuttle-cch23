@@ -15,6 +15,8 @@ use axum_extra::extract::CookieJar;
 use base64::Engine;
 use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::json;
+use shuttle_runtime::CustomError;
+use sqlx::{postgres::PgPoolOptions, Executor as _, PgPool, QueryBuilder, Row as _};
 
 async fn hello_world() -> &'static str {
     "Hello, world!"
@@ -272,13 +274,102 @@ async fn day12_task3(
     })))
 }
 
+async fn day13_task1(State(pool): State<Pool>) -> Result<String> {
+    let row = sqlx::query("SELECT 20231213")
+        .fetch_one(&pool.pool)
+        .await
+        .map_err(|e| format!("sql error: {e:?}"))?;
+    let res: i32 = row.get(0);
+    Ok(format!("{res}"))
+}
+
+async fn day13_task2_reset(State(pool): State<Pool>) -> Result<impl IntoResponse> {
+    sqlx::migrate!()
+        .undo(&pool.pool, 0)
+        .await
+        .map_err(|e| format!("{e:?}"))?;
+    sqlx::migrate!()
+        .run(&pool.pool)
+        .await
+        .map_err(|e| format!("{e:?}"))?;
+
+    Ok(())
+}
+
+#[derive(Deserialize, Debug)]
+struct Order {
+    id: i32,
+    region_id: i32,
+    gift_name: String,
+    quantity: i32,
+}
+
+async fn day13_task2_orders(
+    State(pool): State<Pool>,
+    Json(orders): Json<Vec<Order>>,
+) -> Result<impl IntoResponse> {
+    let mut query_builder =
+        QueryBuilder::new("INSERT INTO orders (id, region_id, gift_name, quantity)");
+
+    query_builder.push_values(orders, |mut b, order| {
+        b.push_bind(order.id)
+            .push_bind(order.region_id)
+            .push_bind(order.gift_name)
+            .push_bind(order.quantity);
+    });
+
+    let query = query_builder.build();
+
+    query
+        .execute(&pool.pool)
+        .await
+        .map_err(|e| format!("SQL error: {e:?}"))?;
+
+    Ok(())
+}
+
+async fn day13_task2_orders_total(State(pool): State<Pool>) -> Result<impl IntoResponse> {
+    let row = sqlx::query("SELECT SUM(quantity) FROM orders")
+        .fetch_one(&pool.pool)
+        .await
+        .map_err(|e| format!("SQL error: {e:?}"))?;
+    let res: i64 = row.get(0);
+    Ok(Json(json!({ "total": res })))
+}
+
+async fn day13_task2_orders_popular(State(pool): State<Pool>) -> Result<impl IntoResponse> {
+    let row = sqlx::query("SELECT gift_name FROM orders WHERE id = (SELECT MAX(id) FROM orders)")
+        .fetch_all(&pool.pool)
+        .await
+        .map_err(|e| format!("SQL error: {e:?}"))?;
+
+    let res = if row.len() == 1 {
+        let res: String = row[0].get(0);
+        json!(res)
+    } else {
+        json!(null)
+    };
+
+    Ok(Json(json!({"popular": res})))
+}
+
 #[derive(Default)]
 struct AppState {
     day12: HashMap<String, time::Instant>,
 }
 
+#[derive(Clone)]
+struct Pool {
+    pool: PgPool,
+}
+
 #[shuttle_runtime::main]
-async fn main() -> shuttle_axum::ShuttleAxum {
+async fn main(#[shuttle_shared_db::Postgres] pool: PgPool) -> shuttle_axum::ShuttleAxum {
+    dbg!(sqlx::migrate!())
+        .run(&pool)
+        .await
+        .map_err(CustomError::new)?;
+
     let shared_state = Arc::new(RwLock::new(AppState::default()));
 
     let router = Router::new()
@@ -297,7 +388,13 @@ async fn main() -> shuttle_axum::ShuttleAxum {
         .route("/12/load/:key", get(day12_task1_get))
         .route("/12/ulids", post(day12_task2))
         .route("/12/ulids/:weekday", post(day12_task3))
-        .route("/", get(hello_world))
-        .with_state(shared_state);
+        .with_state(shared_state)
+        .route("/13/sql", get(day13_task1))
+        .route("/13/reset", post(day13_task2_reset))
+        .route("/13/orders", post(day13_task2_orders))
+        .route("/13/orders/total", get(day13_task2_orders_total))
+        .route("/13/orders/popular", get(day13_task2_orders_popular))
+        .with_state(Pool { pool })
+        .route("/", get(hello_world));
     Ok(router.into())
 }
