@@ -16,7 +16,7 @@ use base64::Engine;
 use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::json;
 use shuttle_runtime::CustomError;
-use sqlx::{postgres::PgPoolOptions, Executor as _, PgPool, QueryBuilder, Row as _};
+use sqlx::{PgPool, QueryBuilder, Row as _};
 
 async fn hello_world() -> &'static str {
     "Hello, world!"
@@ -353,6 +353,41 @@ async fn day13_task2_orders_popular(State(pool): State<Pool>) -> Result<impl Int
     Ok(Json(json!({"popular": res})))
 }
 
+#[derive(Deserialize)]
+struct Day14 {
+    content: String,
+}
+
+async fn day14_task1(Json(input): Json<Day14>) -> Result<impl IntoResponse> {
+    let resp = format!(
+        r"<html>
+  <head>
+    <title>CCH23 Day 14</title>
+  </head>
+  <body>
+    {}
+  </body>
+</html>",
+        input.content
+    );
+    Ok(resp)
+}
+
+async fn day14_task2(Json(input): Json<Day14>) -> Result<impl IntoResponse> {
+    let resp = format!(
+        r"<html>
+  <head>
+    <title>CCH23 Day 14</title>
+  </head>
+  <body>
+    {}
+  </body>
+</html>",
+        html_escape::encode_double_quoted_attribute(&input.content)
+    );
+    Ok(resp)
+}
+
 #[derive(Default)]
 struct AppState {
     day12: HashMap<String, time::Instant>,
@@ -394,6 +429,8 @@ async fn main(#[shuttle_shared_db::Postgres] pool: PgPool) -> shuttle_axum::Shut
         .route("/13/orders", post(day13_task2_orders))
         .route("/13/orders/total", get(day13_task2_orders_total))
         .route("/13/orders/popular", get(day13_task2_orders_popular))
+        .route("/14/unsafe", post(day14_task1))
+        .route("/14/safe", post(day14_task2))
         .with_state(Pool { pool })
         .route("/", get(hello_world));
     Ok(router.into())
