@@ -388,6 +388,87 @@ async fn day14_task2(Json(input): Json<Day14>) -> Result<impl IntoResponse> {
     Ok(resp)
 }
 
+#[derive(Deserialize)]
+struct Day15 {
+    input: String,
+}
+
+async fn day15_task1(Json(input): Json<Day15>) -> impl IntoResponse {
+    let (code, resp) = if is_nice(&input.input) {
+        (StatusCode::OK, "nice")
+    } else {
+        (StatusCode::BAD_REQUEST, "naughty")
+    };
+
+    (code, Json(json!({ "result": resp })))
+}
+
+fn is_nice(s: &str) -> bool {
+    let vowels = s.chars().filter(|c| "aeiouy".contains(*c)).count();
+    let twice = s
+        .as_bytes()
+        .windows(2)
+        .any(|w| w[0] == w[1] && w[0].is_ascii_alphabetic());
+    let err = ["ab", "cd", "pq", "xy"].iter().any(|p| s.contains(p));
+
+    vowels >= 3 && twice && !err
+}
+
+async fn day15_task2(Json(input): Json<Day15>) -> impl IntoResponse {
+    let s = &input.input;
+
+    let len = s.len();
+    let uppercase = s.chars().any(|c| c.is_uppercase());
+    let lowercase = s.chars().any(|c| c.is_lowercase());
+    let digit = s.chars().filter(|c| c.is_digit(10)).count();
+    let sum = s
+        .chars()
+        .map(|c| if c.is_digit(10) { c } else { ' ' })
+        .collect::<String>()
+        .split_ascii_whitespace()
+        .map(|w| w.parse::<i64>().unwrap())
+        .sum::<i64>();
+
+    let re_joy = regex::Regex::new(r"j.*o.*y").unwrap();
+    let re_no_joy = &[
+        regex::Regex::new(r"j.*y.*o").unwrap(),
+        regex::Regex::new(r"o.*j.*y").unwrap(),
+        regex::Regex::new(r"o.*y.*j").unwrap(),
+        regex::Regex::new(r"y.*j.*o").unwrap(),
+        regex::Regex::new(r"y.*o.*j").unwrap(),
+    ];
+    let joy = re_joy.is_match(s) && !re_no_joy.iter().any(|re| re.is_match(s));
+    let rep = s.as_bytes().windows(3).any(|w| {
+        w[0] == w[2] && w[0] != w[1] && w[0].is_ascii_alphabetic() && w[1].is_ascii_alphabetic()
+    });
+    let unicode = s.chars().any(|c| ('\u{2980}'..='\u{2BFF}').contains(&c));
+    let emoji = s
+        .chars()
+        .any(|c| unic::emoji::char::is_emoji_presentation(c));
+    let digest = sha256::digest(s.as_bytes());
+
+    let (code, resp) = match () {
+        _ if len < 8 => (400, "8 chars"),
+        _ if !uppercase || !lowercase || digit == 0 => (400, "more types of chars"),
+        _ if digit < 5 => (400, "55555"),
+        _ if sum != 2023 => (400, "math is hard"),
+        _ if !joy => (406, "not joyful enough"),
+        _ if !rep => (451, "illegal: no sandwich"),
+        _ if !unicode => (416, "outranged"),
+        _ if !emoji => (426, "😳"),
+        _ if !digest.ends_with("a") => (418, "not a coffee brewer"),
+        _ => (200, "that's a nice password"),
+    };
+
+    (
+        StatusCode::from_u16(code).unwrap(),
+        Json(json!({
+            "result": if code == 200 { "nice" } else { "naughty" },
+            "reason": resp,
+        })),
+    )
+}
+
 #[derive(Default)]
 struct AppState {
     day12: HashMap<String, time::Instant>,
@@ -431,6 +512,8 @@ async fn main(#[shuttle_shared_db::Postgres] pool: PgPool) -> shuttle_axum::Shut
         .route("/13/orders/popular", get(day13_task2_orders_popular))
         .route("/14/unsafe", post(day14_task1))
         .route("/14/safe", post(day14_task2))
+        .route("/15/nice", post(day15_task1))
+        .route("/15/game", post(day15_task2))
         .with_state(Pool { pool })
         .route("/", get(hello_world));
     Ok(router.into())

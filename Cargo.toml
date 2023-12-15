@@ -11,9 +11,11 @@ base64 = "0.21.5"
 bytes = { version = "1.5.0" }
 html-escape = "0.2.13"
 image = "0.24.7"
+regex = "1.10.2"
 reqwest = { version = "0.11.22", features = ["json"] }
 serde = "1.0.193"
 serde_json = "1.0.108"
+sha256 = "1.4.0"
 shuttle-axum = { version = "0.35.0", default-features = false, features = [
     "axum-0-7",
 ] }
@@ -25,4 +27,5 @@ tokio = "1.35.0"
 tower-http = { version = "0.5.0", features = ["fs"] }
 tracing = "0.1.40"
 ulid = "1.1.0"
+unic = "0.9.0"
 uuid = "1.6.1"
