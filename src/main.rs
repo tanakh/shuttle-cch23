@@ -13,6 +13,7 @@ use axum::{
 };
 use axum_extra::extract::CookieJar;
 use base64::Engine;
+use image::codecs::gif;
 use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::json;
 use shuttle_runtime::CustomError;
@@ -283,7 +284,9 @@ async fn day13_task1(State(pool): State<Pool>) -> Result<String> {
     Ok(format!("{res}"))
 }
 
-async fn day13_task2_reset(State(pool): State<Pool>) -> Result<impl IntoResponse> {
+async fn day13_18_reset(State(pool): State<Pool>) -> Result<impl IntoResponse> {
+    dbg!();
+
     let migrator = sqlx::migrate!();
     migrator
         .undo(&pool.pool, 0)
@@ -304,7 +307,13 @@ struct Order {
     quantity: i32,
 }
 
-async fn day13_task2_orders(
+#[derive(Deserialize, Debug)]
+struct Region {
+    id: i32,
+    name: String,
+}
+
+async fn day13_18_orders(
     State(pool): State<Pool>,
     Json(orders): Json<Vec<Order>>,
 ) -> Result<impl IntoResponse> {
@@ -328,6 +337,26 @@ async fn day13_task2_orders(
     Ok(())
 }
 
+async fn day18_regions(
+    State(pool): State<Pool>,
+    Json(regions): Json<Vec<Region>>,
+) -> Result<impl IntoResponse> {
+    let mut query_builder = QueryBuilder::new("INSERT INTO regions (id, name)");
+
+    query_builder.push_values(regions, |mut b, region| {
+        b.push_bind(region.id).push_bind(region.name);
+    });
+
+    let query = query_builder.build();
+
+    query
+        .execute(&pool.pool)
+        .await
+        .map_err(|e| format!("SQL error: {e:?}"))?;
+
+    Ok(())
+}
+
 async fn day13_task2_orders_total(State(pool): State<Pool>) -> Result<impl IntoResponse> {
     let row = sqlx::query("SELECT SUM(quantity) FROM orders")
         .fetch_one(&pool.pool)
@@ -337,11 +366,48 @@ async fn day13_task2_orders_total(State(pool): State<Pool>) -> Result<impl IntoR
     Ok(Json(json!({ "total": res })))
 }
 
+async fn day18_total(State(pool): State<Pool>) -> Result<impl IntoResponse> {
+    let row = sqlx::query(
+        "
+        SELECT
+            regions.name AS region,
+            SUM(orders.quantity) AS total
+        FROM orders
+        JOIN regions ON orders.region_id = regions.id
+        GROUP BY orders.region_id, regions.id
+        ORDER BY regions.name
+    ",
+    )
+    .fetch_all(&pool.pool)
+    .await
+    .map_err(|e| format!("SQL error: {e:?}"))?;
+
+    let res = row
+        .into_iter()
+        .map(|row| {
+            let region: String = row.get("region");
+            let total: i64 = row.get("total");
+            json!({
+                "region": region,
+                "total": total,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    Ok(Json(res))
+}
+
 async fn day13_task2_orders_popular(State(pool): State<Pool>) -> Result<impl IntoResponse> {
-    let row = sqlx::query("SELECT gift_name FROM orders WHERE id = (SELECT MAX(id) FROM orders)")
-        .fetch_all(&pool.pool)
-        .await
-        .map_err(|e| format!("SQL error: {e:?}"))?;
+    let row = sqlx::query(
+        "
+    SELECT gift_name
+    FROM orders
+    WHERE id = (SELECT MAX(id) FROM orders)
+    ",
+    )
+    .fetch_all(&pool.pool)
+    .await
+    .map_err(|e| format!("SQL error: {e:?}"))?;
 
     let res = if row.len() == 1 {
         let res: String = row[0].get(0);
@@ -351,6 +417,52 @@ async fn day13_task2_orders_popular(State(pool): State<Pool>) -> Result<impl Int
     };
 
     Ok(Json(json!({"popular": res})))
+}
+
+async fn day18_top_list(
+    Path(limit): Path<i32>,
+    State(pool): State<Pool>,
+) -> Result<impl IntoResponse> {
+    let row = sqlx::query(
+        "
+        SELECT
+            sum.region_name AS region,
+            ARRAY_REMOVE(
+                (ARRAY_AGG(
+                    sum.gift_name ORDER BY sum.quantity DESC, sum.gift_name ASC
+                ))[:$1], NULL
+            ) AS top_gifts
+        FROM (
+            SELECT
+                regions.name AS region_name,
+                orders.gift_name AS gift_name,
+                SUM(orders.quantity) AS quantity
+            FROM regions
+            LEFT JOIN orders ON regions.id = orders.region_id
+            GROUP BY regions.id, orders.gift_name
+        ) AS sum
+        GROUP BY sum.region_name
+        ORDER BY sum.region_name ASC
+    ",
+    )
+    .bind(limit)
+    .fetch_all(&pool.pool)
+    .await
+    .map_err(|e| format!("SQL error: {e:?}"))?;
+
+    let mut ret = vec![];
+
+    for row in row {
+        let region: String = row.get("region");
+        let top_gifts: Vec<String> = row.get("top_gifts");
+
+        ret.push(json!({
+            "region": region,
+            "top_gifts": top_gifts,
+        }));
+    }
+
+    Ok(Json(ret))
 }
 
 #[derive(Deserialize)]
@@ -506,14 +618,19 @@ async fn main(#[shuttle_shared_db::Postgres] pool: PgPool) -> shuttle_axum::Shut
         .route("/12/ulids/:weekday", post(day12_task3))
         .with_state(shared_state)
         .route("/13/sql", get(day13_task1))
-        .route("/13/reset", post(day13_task2_reset))
-        .route("/13/orders", post(day13_task2_orders))
+        .route("/13/reset", post(day13_18_reset))
+        .route("/13/orders", post(day13_18_orders))
         .route("/13/orders/total", get(day13_task2_orders_total))
         .route("/13/orders/popular", get(day13_task2_orders_popular))
         .route("/14/unsafe", post(day14_task1))
         .route("/14/safe", post(day14_task2))
         .route("/15/nice", post(day15_task1))
         .route("/15/game", post(day15_task2))
+        .route("/18/reset", post(day13_18_reset))
+        .route("/18/orders", post(day13_18_orders))
+        .route("/18/regions", post(day18_regions))
+        .route("/18/regions/total", get(day18_total))
+        .route("/18/regions/top_list/:limit", get(day18_top_list))
         .with_state(Pool { pool })
         .route("/", get(hello_world));
     Ok(router.into())
