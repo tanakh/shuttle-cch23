@@ -13,7 +13,6 @@ use axum::{
 };
 use axum_extra::extract::CookieJar;
 use base64::Engine;
-use image::codecs::gif;
 use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::json;
 use shuttle_runtime::CustomError;
@@ -276,17 +275,14 @@ async fn day12_task3(
 }
 
 async fn day13_task1(State(pool): State<Pool>) -> Result<String> {
-    let row = sqlx::query("SELECT 20231213")
+    let (res,) = sqlx::query_as::<_, (i32,)>("SELECT 20231213")
         .fetch_one(&pool.pool)
         .await
         .map_err(|e| format!("sql error: {e:?}"))?;
-    let res: i32 = row.get(0);
     Ok(format!("{res}"))
 }
 
 async fn day13_18_reset(State(pool): State<Pool>) -> Result<impl IntoResponse> {
-    dbg!();
-
     let migrator = sqlx::migrate!();
     migrator
         .undo(&pool.pool, 0)
@@ -358,16 +354,15 @@ async fn day18_regions(
 }
 
 async fn day13_task2_orders_total(State(pool): State<Pool>) -> Result<impl IntoResponse> {
-    let row = sqlx::query("SELECT SUM(quantity) FROM orders")
+    let total = sqlx::query_as::<_, (i64,)>("SELECT SUM(quantity) FROM orders")
         .fetch_one(&pool.pool)
         .await
         .map_err(|e| format!("SQL error: {e:?}"))?;
-    let res: i64 = row.get(0);
-    Ok(Json(json!({ "total": res })))
+    Ok(Json(json!({ "total": total })))
 }
 
 async fn day18_total(State(pool): State<Pool>) -> Result<impl IntoResponse> {
-    let row = sqlx::query(
+    let row = sqlx::query_as::<_, (String, i64)>(
         "
         SELECT
             regions.name AS region,
@@ -384,9 +379,7 @@ async fn day18_total(State(pool): State<Pool>) -> Result<impl IntoResponse> {
 
     let res = row
         .into_iter()
-        .map(|row| {
-            let region: String = row.get("region");
-            let total: i64 = row.get("total");
+        .map(|(region, total)| {
             json!({
                 "region": region,
                 "total": total,
@@ -398,11 +391,11 @@ async fn day18_total(State(pool): State<Pool>) -> Result<impl IntoResponse> {
 }
 
 async fn day13_task2_orders_popular(State(pool): State<Pool>) -> Result<impl IntoResponse> {
-    let row = sqlx::query(
+    let row = sqlx::query_as::<_, (String,)>(
         "
-    SELECT gift_name
-    FROM orders
-    WHERE id = (SELECT MAX(id) FROM orders)
+        SELECT gift_name
+        FROM orders
+        WHERE id = (SELECT MAX(id) FROM orders)
     ",
     )
     .fetch_all(&pool.pool)
@@ -410,8 +403,7 @@ async fn day13_task2_orders_popular(State(pool): State<Pool>) -> Result<impl Int
     .map_err(|e| format!("SQL error: {e:?}"))?;
 
     let res = if row.len() == 1 {
-        let res: String = row[0].get(0);
-        json!(res)
+        json!(row[0].0.clone())
     } else {
         json!(null)
     };
@@ -423,7 +415,7 @@ async fn day18_top_list(
     Path(limit): Path<i32>,
     State(pool): State<Pool>,
 ) -> Result<impl IntoResponse> {
-    let row = sqlx::query(
+    let row = sqlx::query_as::<_, (String, Vec<String>)>(
         "
         SELECT
             sum.region_name AS region,
@@ -452,10 +444,7 @@ async fn day18_top_list(
 
     let mut ret = vec![];
 
-    for row in row {
-        let region: String = row.get("region");
-        let top_gifts: Vec<String> = row.get("top_gifts");
-
+    for (region, top_gifts) in row {
         ret.push(json!({
             "region": region,
             "top_gifts": top_gifts,
