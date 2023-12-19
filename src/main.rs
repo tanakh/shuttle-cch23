@@ -1,11 +1,19 @@
 use std::{
+    borrow::BorrowMut,
+    cell::RefCell,
     collections::HashMap,
     io::Cursor,
-    sync::{Arc, RwLock},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex, RwLock,
+    },
 };
 
 use axum::{
-    extract::{Multipart, Path, State},
+    extract::{
+        ws::{Message, WebSocket},
+        Multipart, Path, State, WebSocketUpgrade,
+    },
     http::StatusCode,
     response::{IntoResponse, Result},
     routing::{get, post},
@@ -13,10 +21,16 @@ use axum::{
 };
 use axum_extra::extract::CookieJar;
 use base64::Engine;
-use serde::{de::DeserializeOwned, Deserialize};
+use futures_util::{
+    future::{select_all, Either},
+    stream_select, SinkExt as _, StreamExt as _,
+};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::json;
 use shuttle_runtime::CustomError;
-use sqlx::{PgPool, QueryBuilder, Row as _};
+use sqlx::{PgPool, QueryBuilder};
+use tokio::sync::broadcast::{Receiver, Sender};
+use tokio_stream::wrappers::BroadcastStream;
 
 async fn hello_world() -> &'static str {
     "Hello, world!"
@@ -570,6 +584,148 @@ async fn day15_task2(Json(input): Json<Day15>) -> impl IntoResponse {
     )
 }
 
+async fn day19_task1(ws: WebSocketUpgrade) -> impl IntoResponse {
+    ws.on_upgrade(day19_task1_handle)
+}
+
+async fn day19_task1_handle(mut socket: WebSocket) {
+    let mut started = false;
+
+    while let Some(msg) = socket.recv().await {
+        let Ok(msg) = msg else {
+            return;
+        };
+        let Ok(msg) = msg.to_text() else {
+            return;
+        };
+
+        if !started {
+            if msg == "serve" {
+                started = true;
+            }
+        } else {
+            if msg == "ping" {
+                if socket.send("pong".into()).await.is_err() {
+                    // client disconnected
+                    return;
+                }
+            }
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct Tweet {
+    user: String,
+    message: String,
+}
+
+#[derive(Deserialize)]
+struct TweetMessage {
+    message: String,
+}
+
+#[derive(Clone, Default)]
+struct TwitterState {
+    views: Arc<AtomicUsize>,
+    rooms: Arc<Mutex<HashMap<usize, Room>>>,
+}
+
+struct Room {
+    tx: Sender<Tweet>,
+}
+
+impl TwitterState {
+    fn join(&self, room: usize) -> (Sender<Tweet>, Receiver<Tweet>) {
+        let mut room_lock = self.rooms.lock().unwrap();
+        let room = room_lock.entry(room).or_insert_with(|| {
+            let (tx, _rx) = tokio::sync::broadcast::channel(1_000_000);
+            Room { tx }
+        });
+        (room.tx.clone(), room.tx.subscribe())
+    }
+
+    fn inc_views(&self) {
+        self.views.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn reset_views(&self) {
+        self.views.store(0, Ordering::SeqCst);
+    }
+
+    fn views(&self) -> usize {
+        self.views.load(Ordering::SeqCst)
+    }
+}
+
+async fn day19_task2_reset(State(state): State<TwitterState>) -> impl IntoResponse {
+    eprintln!("reset views");
+    state.reset_views();
+}
+
+async fn day19_task2_views(State(state): State<TwitterState>) -> impl IntoResponse {
+    let views = state.views();
+    eprintln!("views: {views}");
+    format!("{views}")
+}
+
+async fn day19_task2(
+    Path((room, user)): Path<(usize, String)>,
+    State(state): State<TwitterState>,
+    ws: WebSocketUpgrade,
+) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| day19_task2_handle(room, user, state, socket))
+}
+
+async fn day19_task2_handle(room: usize, user: String, state: TwitterState, socket: WebSocket) {
+    eprintln!("{user} enters room #{room}");
+
+    let (tx, rx) = state.join(room);
+
+    let rx = BroadcastStream::new(rx).map(Either::Right);
+
+    let (mut socket_sink, socket_stream) = socket.split();
+
+    let socket = socket_stream.map(Either::Left);
+    let mut r = stream_select!(rx, socket);
+
+    while let Some(msg) = r.next().await {
+        match msg {
+            Either::Left(msg) => {
+                let Ok(msg) = msg else {
+                    return;
+                };
+                let Ok(msg) = msg.to_text() else {
+                    return;
+                };
+                let Ok(msg) = serde_json::from_str::<TweetMessage>(msg) else {
+                    return;
+                };
+                if msg.message.len() > 128 {
+                    continue;
+                }
+                tx.send(Tweet {
+                    user: user.clone(),
+                    message: msg.message,
+                })
+                .unwrap();
+            }
+            Either::Right(tweet) => {
+                if let Ok(tweet) = tweet {
+                    state.inc_views();
+                    if socket_sink
+                        .send(Message::Text(serde_json::to_string(&tweet).unwrap()))
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[derive(Default)]
 struct AppState {
     day12: HashMap<String, time::Instant>,
@@ -621,6 +777,11 @@ async fn main(#[shuttle_shared_db::Postgres] pool: PgPool) -> shuttle_axum::Shut
         .route("/18/regions/total", get(day18_total))
         .route("/18/regions/top_list/:limit", get(day18_top_list))
         .with_state(Pool { pool })
+        .route("/19/ws/ping", get(day19_task1))
+        .route("/19/reset", post(day19_task2_reset))
+        .route("/19/views", get(day19_task2_views))
+        .route("/19/ws/room/:room_id/user/:user_id", get(day19_task2))
+        .with_state(TwitterState::default())
         .route("/", get(hello_world));
     Ok(router.into())
 }
