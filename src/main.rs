@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    fs,
     io::Cursor,
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -13,12 +14,13 @@ use axum::{
         Multipart, Path, State, WebSocketUpgrade,
     },
     http::StatusCode,
-    response::{IntoResponse, Result},
+    response::{IntoResponse, Response, Result},
     routing::{get, post},
     Json, Router,
 };
 use axum_extra::extract::CookieJar;
 use base64::Engine;
+use bytes::{Buf as _, Bytes};
 use futures_util::{future::Either, stream_select, SinkExt as _, StreamExt as _};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::json;
@@ -26,6 +28,27 @@ use shuttle_runtime::CustomError;
 use sqlx::{PgPool, QueryBuilder};
 use tokio::sync::broadcast::{Receiver, Sender};
 use tokio_stream::wrappers::BroadcastStream;
+
+struct AppError(anyhow::Error);
+
+impl IntoResponse for AppError {
+    fn into_response(self) -> Response {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Something went wrong: {}", self.0),
+        )
+            .into_response()
+    }
+}
+
+impl<E> From<E> for AppError
+where
+    E: Into<anyhow::Error>,
+{
+    fn from(err: E) -> Self {
+        Self(err.into())
+    }
+}
 
 async fn hello_world() -> &'static str {
     "Hello, world!"
@@ -111,7 +134,7 @@ fn get_value_from_cookie<T: DeserializeOwned>(jar: &CookieJar, name: &str) -> Op
     let s = jar.get(name)?.value();
     let decoded = base64::prelude::BASE64_STANDARD.decode(s).ok()?;
     let decoded = String::from_utf8_lossy(&decoded);
-    Some(serde_json::from_str(&decoded).ok()?)
+    serde_json::from_str(&decoded).ok()
 }
 
 async fn day7_task1(jar: CookieJar) -> impl IntoResponse {
@@ -143,14 +166,12 @@ async fn day7_task2_3(jar: CookieJar) -> impl IntoResponse {
     Json(json!({"cookies": cookies, "pantry": pantry}))
 }
 
-async fn pokeapi(id: u64) -> Result<HashMap<String, serde_json::Value>> {
+async fn pokeapi(id: u64) -> Result<HashMap<String, serde_json::Value>, AppError> {
     Ok(
         reqwest::get(format!("https://pokeapi.co/api/v2/pokemon/{id}/"))
-            .await
-            .map_err(|_| "pokeapi error")?
+            .await?
             .json::<HashMap<String, serde_json::Value>>()
-            .await
-            .map_err(|_| "invalid json")?,
+            .await?,
     )
 }
 
@@ -170,7 +191,7 @@ async fn day8_task2(Path(id): Path<u64>) -> Result<impl IntoResponse> {
     Ok(format!("{f:.12}"))
 }
 
-async fn day11_task2(mut multipart: Multipart) -> Result<impl IntoResponse> {
+async fn day11_task2(mut multipart: Multipart) -> Result<impl IntoResponse, AppError> {
     while let Some(field) = multipart.next_field().await? {
         if field.name() != Some("image") {
             continue;
@@ -180,10 +201,10 @@ async fn day11_task2(mut multipart: Multipart) -> Result<impl IntoResponse> {
         let mut reader = image::io::Reader::new(Cursor::new(bytes));
         reader.set_format(image::ImageFormat::Png);
 
-        let image = reader.decode().map_err(|e| format!("{e:?}"))?;
+        let image = reader.decode()?;
         let image = image
             .as_rgb8()
-            .ok_or_else(|| format!("unsupported color format"))?;
+            .ok_or_else(|| anyhow::anyhow!("unsupported color format"))?;
 
         let mut red_pixels = 0;
         for y in 0..image.height() {
@@ -202,7 +223,7 @@ async fn day11_task2(mut multipart: Multipart) -> Result<impl IntoResponse> {
         return Ok(format!("{red_pixels}"));
     }
 
-    Err("no image found")?
+    Err(anyhow::anyhow!("no image found"))?
 }
 
 async fn day12_task1_post(State(state): State<Arc<RwLock<AppState>>>, Path(key): Path<String>) {
@@ -226,23 +247,23 @@ async fn day12_task1_get(
     }
 }
 
-async fn day12_task2(Json(ulids): Json<Vec<String>>) -> Result<impl IntoResponse> {
+async fn day12_task2(Json(ulids): Json<Vec<String>>) -> Result<impl IntoResponse, AppError> {
     let ret = ulids
         .into_iter()
-        .map(|s| -> Result<_> {
-            let ulid = ulid::Ulid::from_string(&s).map_err(|e| format!("{e}"))?;
-            Ok(uuid::Uuid::from_u128(ulid.0))
+        .map(|s| {
+            let ulid = ulid::Ulid::from_string(&s)?;
+            Ok::<_, AppError>(uuid::Uuid::from_u128(ulid.0))
         })
         .rev()
-        .collect::<Result<Vec<uuid::Uuid>>>()?;
+        .collect::<Result<Vec<uuid::Uuid>, AppError>>()?;
     Ok(Json(ret))
 }
 
 async fn day12_task3(
     Path(weekday): Path<String>,
     Json(ulids): Json<Vec<String>>,
-) -> Result<impl IntoResponse> {
-    let weekday: u8 = weekday.parse().map_err(|_| "invalid weekday")?;
+) -> Result<impl IntoResponse, AppError> {
+    let weekday: u8 = weekday.parse()?;
 
     let mut christmas_eve = 0;
     let mut weekday_cnt = 0;
@@ -250,13 +271,10 @@ async fn day12_task3(
     let mut lsb_is_1 = 0;
 
     for s in ulids {
-        let ulid = ulid::Ulid::from_string(&s).map_err(|e| format!("{e}"))?;
+        let ulid = ulid::Ulid::from_string(&s)?;
         let ts = ulid.datetime();
-        let epoch = ts
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .map_err(|_| "invalid timestamp")?;
-        let dt = time::OffsetDateTime::from_unix_timestamp_nanos(epoch.as_nanos() as i128)
-            .map_err(|e| format!("{e}"))?;
+        let epoch = ts.duration_since(std::time::SystemTime::UNIX_EPOCH)?;
+        let dt = time::OffsetDateTime::from_unix_timestamp_nanos(epoch.as_nanos() as i128)?;
 
         if dt.month() as u8 == 12 && dt.day() == 24 {
             christmas_eve += 1;
@@ -283,24 +301,17 @@ async fn day12_task3(
     })))
 }
 
-async fn day13_task1(State(pool): State<Pool>) -> Result<String> {
+async fn day13_task1(State(pool): State<Pool>) -> Result<String, AppError> {
     let (res,) = sqlx::query_as::<_, (i32,)>("SELECT 20231213")
         .fetch_one(&pool.pool)
-        .await
-        .map_err(|e| format!("sql error: {e:?}"))?;
+        .await?;
     Ok(format!("{res}"))
 }
 
-async fn day13_18_reset(State(pool): State<Pool>) -> Result<impl IntoResponse> {
+async fn day13_18_reset(State(pool): State<Pool>) -> Result<(), AppError> {
     let migrator = sqlx::migrate!();
-    migrator
-        .undo(&pool.pool, 0)
-        .await
-        .map_err(|e| format!("{e:?}"))?;
-    migrator
-        .run(&pool.pool)
-        .await
-        .map_err(|e| format!("{e:?}"))?;
+    migrator.undo(&pool.pool, 0).await?;
+    migrator.run(&pool.pool).await?;
     Ok(())
 }
 
@@ -321,7 +332,11 @@ struct Region {
 async fn day13_18_orders(
     State(pool): State<Pool>,
     Json(orders): Json<Vec<Order>>,
-) -> Result<impl IntoResponse> {
+) -> Result<(), AppError> {
+    if orders.is_empty() {
+        return Ok(());
+    }
+
     let mut query_builder =
         QueryBuilder::new("INSERT INTO orders (id, region_id, gift_name, quantity)");
 
@@ -333,11 +348,7 @@ async fn day13_18_orders(
     });
 
     let query = query_builder.build();
-
-    query
-        .execute(&pool.pool)
-        .await
-        .map_err(|e| format!("SQL error: {e:?}"))?;
+    query.execute(&pool.pool).await?;
 
     Ok(())
 }
@@ -345,7 +356,11 @@ async fn day13_18_orders(
 async fn day18_regions(
     State(pool): State<Pool>,
     Json(regions): Json<Vec<Region>>,
-) -> Result<impl IntoResponse> {
+) -> Result<(), AppError> {
+    if regions.is_empty() {
+        return Ok(());
+    }
+
     let mut query_builder = QueryBuilder::new("INSERT INTO regions (id, name)");
 
     query_builder.push_values(regions, |mut b, region| {
@@ -353,24 +368,19 @@ async fn day18_regions(
     });
 
     let query = query_builder.build();
-
-    query
-        .execute(&pool.pool)
-        .await
-        .map_err(|e| format!("SQL error: {e:?}"))?;
+    query.execute(&pool.pool).await?;
 
     Ok(())
 }
 
-async fn day13_task2_orders_total(State(pool): State<Pool>) -> Result<impl IntoResponse> {
+async fn day13_task2_orders_total(State(pool): State<Pool>) -> Result<impl IntoResponse, AppError> {
     let total = sqlx::query_as::<_, (i64,)>("SELECT SUM(quantity) FROM orders")
         .fetch_one(&pool.pool)
-        .await
-        .map_err(|e| format!("SQL error: {e:?}"))?;
+        .await?;
     Ok(Json(json!({ "total": total.0 })))
 }
 
-async fn day18_total(State(pool): State<Pool>) -> Result<impl IntoResponse> {
+async fn day18_total(State(pool): State<Pool>) -> Result<impl IntoResponse, AppError> {
     let row = sqlx::query_as::<_, (String, i64)>(
         "
         SELECT
@@ -383,8 +393,7 @@ async fn day18_total(State(pool): State<Pool>) -> Result<impl IntoResponse> {
     ",
     )
     .fetch_all(&pool.pool)
-    .await
-    .map_err(|e| format!("SQL error: {e:?}"))?;
+    .await?;
 
     let res = row
         .into_iter()
@@ -399,7 +408,9 @@ async fn day18_total(State(pool): State<Pool>) -> Result<impl IntoResponse> {
     Ok(Json(res))
 }
 
-async fn day13_task2_orders_popular(State(pool): State<Pool>) -> Result<impl IntoResponse> {
+async fn day13_task2_orders_popular(
+    State(pool): State<Pool>,
+) -> Result<impl IntoResponse, AppError> {
     let row = sqlx::query_as::<_, (String,)>(
         "
         SELECT gift_name
@@ -408,8 +419,7 @@ async fn day13_task2_orders_popular(State(pool): State<Pool>) -> Result<impl Int
     ",
     )
     .fetch_all(&pool.pool)
-    .await
-    .map_err(|e| format!("SQL error: {e:?}"))?;
+    .await?;
 
     let res = if row.len() == 1 {
         json!(row[0].0.clone())
@@ -423,7 +433,7 @@ async fn day13_task2_orders_popular(State(pool): State<Pool>) -> Result<impl Int
 async fn day18_top_list(
     Path(limit): Path<i32>,
     State(pool): State<Pool>,
-) -> Result<impl IntoResponse> {
+) -> Result<impl IntoResponse, AppError> {
     let row = sqlx::query_as::<_, (String, Vec<String>)>(
         "
         SELECT
@@ -448,8 +458,7 @@ async fn day18_top_list(
     )
     .bind(limit)
     .fetch_all(&pool.pool)
-    .await
-    .map_err(|e| format!("SQL error: {e:?}"))?;
+    .await?;
 
     let mut ret = vec![];
 
@@ -530,10 +539,10 @@ async fn day15_task2(Json(input): Json<Day15>) -> impl IntoResponse {
     let len = s.len();
     let uppercase = s.chars().any(|c| c.is_uppercase());
     let lowercase = s.chars().any(|c| c.is_lowercase());
-    let digit = s.chars().filter(|c| c.is_digit(10)).count();
+    let digit = s.chars().filter(|c| c.is_ascii_digit()).count();
     let sum = s
         .chars()
-        .map(|c| if c.is_digit(10) { c } else { ' ' })
+        .map(|c| if c.is_ascii_digit() { c } else { ' ' })
         .collect::<String>()
         .split_ascii_whitespace()
         .map(|w| w.parse::<i64>().unwrap())
@@ -552,9 +561,7 @@ async fn day15_task2(Json(input): Json<Day15>) -> impl IntoResponse {
         w[0] == w[2] && w[0] != w[1] && w[0].is_ascii_alphabetic() && w[1].is_ascii_alphabetic()
     });
     let unicode = s.chars().any(|c| ('\u{2980}'..='\u{2BFF}').contains(&c));
-    let emoji = s
-        .chars()
-        .any(|c| unic::emoji::char::is_emoji_presentation(c));
+    let emoji = s.chars().any(unic::emoji::char::is_emoji_presentation);
     let digest = sha256::digest(s.as_bytes());
 
     let (code, resp) = match () {
@@ -566,7 +573,7 @@ async fn day15_task2(Json(input): Json<Day15>) -> impl IntoResponse {
         _ if !rep => (451, "illegal: no sandwich"),
         _ if !unicode => (416, "outranged"),
         _ if !emoji => (426, "😳"),
-        _ if !digest.ends_with("a") => (418, "not a coffee brewer"),
+        _ if !digest.ends_with('a') => (418, "not a coffee brewer"),
         _ => (200, "that's a nice password"),
     };
 
@@ -598,13 +605,9 @@ async fn day19_task1_handle(mut socket: WebSocket) {
             if msg == "serve" {
                 started = true;
             }
-        } else {
-            if msg == "ping" {
-                if socket.send("pong".into()).await.is_err() {
-                    // client disconnected
-                    return;
-                }
-            }
+        } else if msg == "ping" && socket.send("pong".into()).await.is_err() {
+            // client disconnected
+            return;
         }
     }
 }
@@ -654,13 +657,11 @@ impl TwitterState {
 }
 
 async fn day19_task2_reset(State(state): State<TwitterState>) -> impl IntoResponse {
-    eprintln!("reset views");
     state.reset_views();
 }
 
 async fn day19_task2_views(State(state): State<TwitterState>) -> impl IntoResponse {
     let views = state.views();
-    eprintln!("views: {views}");
     format!("{views}")
 }
 
@@ -673,8 +674,6 @@ async fn day19_task2(
 }
 
 async fn day19_task2_handle(room: usize, user: String, state: TwitterState, socket: WebSocket) {
-    eprintln!("{user} enters room #{room}");
-
     let (tx, rx) = state.join(room);
 
     let rx = BroadcastStream::new(rx).map(Either::Right);
@@ -719,6 +718,78 @@ async fn day19_task2_handle(room: usize, user: String, state: TwitterState, sock
             }
         }
     }
+}
+
+async fn day20_archive_files(body: Bytes) -> Result<impl IntoResponse, AppError> {
+    let mut archive = tar::Archive::new(body.reader());
+    let file_num = archive
+        .entries()?
+        .filter(|e| matches!(e, Ok(e) if e.header().entry_type() == tar::EntryType::Regular))
+        .count();
+    Ok(format!("{file_num}"))
+}
+
+async fn day20_archive_files_size(body: Bytes) -> Result<impl IntoResponse, AppError> {
+    let mut archive = tar::Archive::new(body.reader());
+    let total_size = archive
+        .entries()?
+        .filter_map(|e| {
+            if let Ok(e) = e {
+                if e.header().entry_type() == tar::EntryType::Regular {
+                    return Some(e.header().size().unwrap());
+                }
+            }
+            None
+        })
+        .sum::<u64>();
+    Ok(format!("{total_size}"))
+}
+
+async fn day20_cookie(body: Bytes) -> Result<impl IntoResponse, AppError> {
+    let mut archive = tar::Archive::new(body.reader());
+    let dir = tempfile::tempdir()?;
+    archive.unpack(dir.path())?;
+
+    let repo = git2::Repository::open(dir.path())?;
+
+    let obj = repo.revparse_single("refs/heads/christmas")?;
+
+    let mut rev_walk = repo.revwalk()?;
+    rev_walk.push(obj.id())?;
+
+    for oid in rev_walk {
+        let oid = oid?;
+        let obj = repo.find_object(oid, None)?;
+
+        repo.checkout_tree(&obj, Some(git2::build::CheckoutBuilder::new().force()))?;
+
+        for e in walkdir::WalkDir::new(dir.path()) {
+            let e = e?;
+            let path = e.path();
+            if path.file_name().and_then(|os| os.to_str()) != Some("santa.txt") {
+                continue;
+            }
+
+            let Ok(s) = fs::read_to_string(path) else {
+                continue;
+            };
+
+            if !s.contains("COOKIE") {
+                continue;
+            }
+
+            let commit = obj.peel_to_commit()?;
+            let author = commit.author();
+            let name = author
+                .name()
+                .ok_or_else(|| anyhow::anyhow!("author name is null"))?;
+            let id = commit.id();
+
+            return Ok(format!("{name} {id}"));
+        }
+    }
+
+    Err(anyhow::anyhow!("no commit found"))?
 }
 
 #[derive(Default)]
@@ -776,6 +847,9 @@ async fn main(#[shuttle_shared_db::Postgres] pool: PgPool) -> shuttle_axum::Shut
         .route("/19/reset", post(day19_task2_reset))
         .route("/19/views", get(day19_task2_views))
         .route("/19/ws/room/:room_id/user/:user_id", get(day19_task2))
+        .route("/20/archive_files", post(day20_archive_files))
+        .route("/20/archive_files_size", post(day20_archive_files_size))
+        .route("/20/cookie", post(day20_cookie))
         .with_state(TwitterState::default())
         .route("/", get(hello_world));
     Ok(router.into())
