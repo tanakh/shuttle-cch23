@@ -1,6 +1,4 @@
 use std::{
-    borrow::BorrowMut,
-    cell::RefCell,
     collections::HashMap,
     io::Cursor,
     sync::{
@@ -21,10 +19,7 @@ use axum::{
 };
 use axum_extra::extract::CookieJar;
 use base64::Engine;
-use futures_util::{
-    future::{select_all, Either},
-    stream_select, SinkExt as _, StreamExt as _,
-};
+use futures_util::{future::Either, stream_select, SinkExt as _, StreamExt as _};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::json;
 use shuttle_runtime::CustomError;
@@ -372,7 +367,7 @@ async fn day13_task2_orders_total(State(pool): State<Pool>) -> Result<impl IntoR
         .fetch_one(&pool.pool)
         .await
         .map_err(|e| format!("SQL error: {e:?}"))?;
-    Ok(Json(json!({ "total": total })))
+    Ok(Json(json!({ "total": total.0 })))
 }
 
 async fn day18_total(State(pool): State<Pool>) -> Result<impl IntoResponse> {
