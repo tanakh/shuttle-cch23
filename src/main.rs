@@ -58,7 +58,7 @@ async fn error() -> impl IntoResponse {
     (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error")
 }
 
-async fn day1(Path(nums): Path<String>) -> impl IntoResponse {
+async fn day1(Path(nums): Path<String>) -> String {
     let val = nums
         .split('/')
         .map(|num| num.parse::<i64>().unwrap())
@@ -86,7 +86,7 @@ struct Reindeer {
     candies: i64,
 }
 
-async fn day4_task1(Json(payload): Json<Vec<Reindeer>>) -> impl IntoResponse {
+async fn day4_task1(Json(payload): Json<Vec<Reindeer>>) -> String {
     let sum = payload.iter().fold(0, |a, b| a + b.strength);
     format!("{sum}")
 }
@@ -175,13 +175,13 @@ async fn pokeapi(id: u64) -> Result<HashMap<String, serde_json::Value>, AppError
     )
 }
 
-async fn day8_task1(Path(id): Path<u64>) -> Result<impl IntoResponse> {
+async fn day8_task1(Path(id): Path<u64>) -> Result<String> {
     let pokemon = pokeapi(id).await?;
     let weight = pokemon.get("weight").unwrap().as_u64().unwrap();
     Ok(format!("{}", weight as f64 / 10.0))
 }
 
-async fn day8_task2(Path(id): Path<u64>) -> Result<impl IntoResponse> {
+async fn day8_task2(Path(id): Path<u64>) -> Result<String> {
     let pokemon = pokeapi(id).await?;
     let weight = pokemon.get("weight").unwrap().as_u64().unwrap();
     let h = 10.0_f64;
@@ -191,7 +191,7 @@ async fn day8_task2(Path(id): Path<u64>) -> Result<impl IntoResponse> {
     Ok(format!("{f:.12}"))
 }
 
-async fn day11_task2(mut multipart: Multipart) -> Result<impl IntoResponse, AppError> {
+async fn day11_task2(mut multipart: Multipart) -> Result<String, AppError> {
     while let Some(field) = multipart.next_field().await? {
         if field.name() != Some("image") {
             continue;
@@ -234,7 +234,7 @@ async fn day12_task1_post(State(state): State<Arc<RwLock<AppState>>>, Path(key):
 async fn day12_task1_get(
     State(state): State<Arc<RwLock<AppState>>>,
     Path(key): Path<String>,
-) -> Result<impl IntoResponse> {
+) -> Result<String> {
     let lock = state.read().unwrap();
 
     if let Some(time) = lock.day12.get(&key) {
@@ -477,8 +477,8 @@ struct Day14 {
     content: String,
 }
 
-async fn day14_task1(Json(input): Json<Day14>) -> Result<impl IntoResponse> {
-    let resp = format!(
+async fn day14_task1(Json(input): Json<Day14>) -> String {
+    format!(
         r"<html>
   <head>
     <title>CCH23 Day 14</title>
@@ -488,12 +488,11 @@ async fn day14_task1(Json(input): Json<Day14>) -> Result<impl IntoResponse> {
   </body>
 </html>",
         input.content
-    );
-    Ok(resp)
+    )
 }
 
-async fn day14_task2(Json(input): Json<Day14>) -> Result<impl IntoResponse> {
-    let resp = format!(
+async fn day14_task2(Json(input): Json<Day14>) -> String {
+    format!(
         r"<html>
   <head>
     <title>CCH23 Day 14</title>
@@ -503,8 +502,7 @@ async fn day14_task2(Json(input): Json<Day14>) -> Result<impl IntoResponse> {
   </body>
 </html>",
         html_escape::encode_double_quoted_attribute(&input.content)
-    );
-    Ok(resp)
+    )
 }
 
 #[derive(Deserialize)]
@@ -656,11 +654,11 @@ impl TwitterState {
     }
 }
 
-async fn day19_task2_reset(State(state): State<TwitterState>) -> impl IntoResponse {
+async fn day19_task2_reset(State(state): State<TwitterState>) {
     state.reset_views();
 }
 
-async fn day19_task2_views(State(state): State<TwitterState>) -> impl IntoResponse {
+async fn day19_task2_views(State(state): State<TwitterState>) -> String {
     let views = state.views();
     format!("{views}")
 }
@@ -720,7 +718,7 @@ async fn day19_task2_handle(room: usize, user: String, state: TwitterState, sock
     }
 }
 
-async fn day20_archive_files(body: Bytes) -> Result<impl IntoResponse, AppError> {
+async fn day20_archive_files(body: Bytes) -> Result<String, AppError> {
     let mut archive = tar::Archive::new(body.reader());
     let file_num = archive
         .entries()?
@@ -729,7 +727,7 @@ async fn day20_archive_files(body: Bytes) -> Result<impl IntoResponse, AppError>
     Ok(format!("{file_num}"))
 }
 
-async fn day20_archive_files_size(body: Bytes) -> Result<impl IntoResponse, AppError> {
+async fn day20_archive_files_size(body: Bytes) -> Result<String, AppError> {
     let mut archive = tar::Archive::new(body.reader());
     let total_size = archive
         .entries()?
@@ -745,7 +743,7 @@ async fn day20_archive_files_size(body: Bytes) -> Result<impl IntoResponse, AppE
     Ok(format!("{total_size}"))
 }
 
-async fn day20_cookie(body: Bytes) -> Result<impl IntoResponse, AppError> {
+async fn day20_cookie(body: Bytes) -> Result<String, AppError> {
     let mut archive = tar::Archive::new(body.reader());
     let dir = tempfile::tempdir()?;
     archive.unpack(dir.path())?;
