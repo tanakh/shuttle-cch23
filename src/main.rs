@@ -11,7 +11,7 @@ use std::{
 use axum::{
     extract::{
         ws::{Message, WebSocket},
-        Multipart, Path, State, WebSocketUpgrade,
+        Multipart, Path, Query, State, WebSocketUpgrade,
     },
     http::StatusCode,
     response::{IntoResponse, Response, Result},
@@ -24,7 +24,10 @@ use bytes::{Buf as _, Bytes};
 use country_boundaries::LatLon;
 use dms_coordinates::DMS;
 use futures_util::{future::Either, stream_select, SinkExt as _, StreamExt as _};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{
+    de::{self, DeserializeOwned},
+    Deserialize, Serialize,
+};
 use serde_json::json;
 use shuttle_runtime::CustomError;
 use sqlx::{PgPool, QueryBuilder};
@@ -117,6 +120,28 @@ async fn day4_task2(Json(payload): Json<Vec<Reindeer>>) -> impl IntoResponse {
         "magician": format!("{} could blast you away with a snow magic power of {}", magician.name, magician.snow_magic_power),
         "consumer": format!("{} ate lots of candies, but also some {}", consumer.name, consumer.favorite_food),
     }))
+}
+
+#[derive(Deserialize)]
+struct Pagination {
+    offset: Option<usize>,
+    limit: Option<usize>,
+    split: Option<usize>,
+}
+
+async fn day5(pagination: Query<Pagination>, Json(names): Json<Vec<String>>) -> impl IntoResponse {
+    let offset = pagination.offset.unwrap_or(0);
+    let names = if let Some(limit) = pagination.limit {
+        names[offset..(offset + limit).min(names.len())].to_vec()
+    } else {
+        names[offset..].to_vec()
+    };
+
+    if let Some(split) = pagination.split {
+        Json(json!(names.chunks(split).collect::<Vec<_>>()))
+    } else {
+        Json(json!(names))
+    }
 }
 
 async fn day6(body: String) -> impl IntoResponse {
@@ -864,6 +889,7 @@ async fn main(#[shuttle_shared_db::Postgres] pool: PgPool) -> shuttle_axum::Shut
         .route("/1/*nums", get(day1))
         .route("/4/strength", post(day4_task1))
         .route("/4/contest", post(day4_task2))
+        .route("/5", post(day5))
         .route("/6", post(day6))
         .route("/7/decode", get(day7_task1))
         .route("/7/bake", get(day7_task2_3))
