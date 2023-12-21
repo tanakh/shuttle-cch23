@@ -21,6 +21,8 @@ use axum::{
 use axum_extra::extract::CookieJar;
 use base64::Engine;
 use bytes::{Buf as _, Bytes};
+use country_boundaries::LatLon;
+use dms_coordinates::DMS;
 use futures_util::{future::Either, stream_select, SinkExt as _, StreamExt as _};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::json;
@@ -790,6 +792,54 @@ async fn day20_cookie(body: Bytes) -> Result<String, AppError> {
     Err(anyhow::anyhow!("no commit found"))?
 }
 
+async fn day21_task1(Path(bin): Path<String>) -> Result<impl IntoResponse, AppError> {
+    let cell_id = s2::cellid::CellID(u64::from_str_radix(&bin, 2)?);
+    let cell = s2::cell::Cell::from(cell_id);
+    let center = cell.center();
+    let lat = center.latitude().deg();
+    let lng = center.longitude().deg();
+
+    let lat = DMS::from_decimal_degrees(lat, true);
+    let lng = DMS::from_decimal_degrees(lng, false);
+
+    let lat = format!(
+        "{}°{}'{:.3}''{}",
+        lat.degrees, lat.minutes, lat.seconds, lat.bearing
+    );
+
+    let lng = format!(
+        "{}°{}'{:.3}''{}",
+        lng.degrees, lng.minutes, lng.seconds, lng.bearing
+    );
+
+    Ok(format!("{lat} {lng}"))
+}
+
+async fn day21_task2(Path(bin): Path<String>) -> Result<impl IntoResponse, AppError> {
+    let cell_id = s2::cellid::CellID(u64::from_str_radix(&bin, 2)?);
+    let cell = s2::cell::Cell::from(cell_id);
+    let center = cell.center();
+    let lat = center.latitude().deg();
+    let lng = center.longitude().deg();
+
+    let cbs = country_boundaries::CountryBoundaries::from_reader(Cursor::new(
+        country_boundaries::BOUNDARIES_ODBL_360X180,
+    ))?;
+
+    let ids = cbs.ids(LatLon::new(lat, lng)?);
+
+    let id = ids
+        .last()
+        .ok_or_else(|| anyhow::anyhow!("no country found"))?;
+
+    let country = isocountry::CountryCode::for_alpha2(id)?.name();
+
+    Ok(country
+        .split_ascii_whitespace()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("no country found"))?)
+}
+
 #[derive(Default)]
 struct AppState {
     day12: HashMap<String, time::Instant>,
@@ -848,6 +898,8 @@ async fn main(#[shuttle_shared_db::Postgres] pool: PgPool) -> shuttle_axum::Shut
         .route("/20/archive_files", post(day20_archive_files))
         .route("/20/archive_files_size", post(day20_archive_files_size))
         .route("/20/cookie", post(day20_cookie))
+        .route("/21/coords/:binary", get(day21_task1))
+        .route("/21/country/:binary", get(day21_task2))
         .with_state(TwitterState::default())
         .route("/", get(hello_world));
     Ok(router.into())
