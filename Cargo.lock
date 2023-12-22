@@ -395,12 +395,14 @@ dependencies = [
  "bytes",
  "country-boundaries",
  "dms-coordinates",
+ "euclid",
  "futures",
  "futures-util",
  "git2",
  "html-escape",
  "image",
  "isocountry",
+ "ordered-float",
  "regex",
  "reqwest",
  "s2",
@@ -781,6 +783,15 @@ dependencies = [
  "cfg-if",
  "home",
  "windows-sys 0.48.0",
+]
+
+[[package]]
+name = "euclid"
+version = "0.22.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "87f253bc5c813ca05792837a0ff4b3a580336b224512d48f7eda1d7dd9210787"
+dependencies = [
+ "num-traits",
 ]
 
 [[package]]

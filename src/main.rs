@@ -1,5 +1,6 @@
 use std::{
-    collections::HashMap,
+    cmp::Reverse,
+    collections::{BinaryHeap, HashMap, VecDeque},
     fs,
     io::Cursor,
     sync::{
@@ -23,11 +24,11 @@ use base64::Engine;
 use bytes::{Buf as _, Bytes};
 use country_boundaries::LatLon;
 use dms_coordinates::DMS;
+use euclid::default::*;
+use euclid::point3;
 use futures_util::{future::Either, stream_select, SinkExt as _, StreamExt as _};
-use serde::{
-    de::{self, DeserializeOwned},
-    Deserialize, Serialize,
-};
+use ordered_float::OrderedFloat;
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::json;
 use shuttle_runtime::CustomError;
 use sqlx::{PgPool, QueryBuilder};
@@ -865,6 +866,96 @@ async fn day21_task2(Path(bin): Path<String>) -> Result<impl IntoResponse, AppEr
         .ok_or_else(|| anyhow::anyhow!("no country found"))?)
 }
 
+async fn day22_task1(body: String) -> Result<impl IntoResponse, AppError> {
+    let nums = body
+        .split_ascii_whitespace()
+        .map(|s| s.parse::<u64>().unwrap())
+        .collect::<Vec<_>>();
+
+    let mut ans = 0;
+
+    for i in 0..nums.len() {
+        let mut occ = 0;
+        for j in 0..nums.len() {
+            if nums[i] == nums[j] {
+                occ += 1;
+            }
+        }
+
+        if occ == 1 {
+            ans = nums[i];
+            break;
+        }
+    }
+
+    let resp = "🎁".repeat(ans as usize);
+    Ok(resp)
+}
+
+async fn day22_task2(body: String) -> Result<impl IntoResponse, AppError> {
+    let mut lines = body.lines();
+
+    let n = lines.next().unwrap().parse::<usize>().unwrap();
+
+    let pts = (0..n)
+        .map(|_| {
+            let line = lines.next().unwrap();
+            let nums = line
+                .split_ascii_whitespace()
+                .map(|s| s.parse::<f32>().unwrap())
+                .collect::<Vec<_>>();
+            point3(nums[0], nums[1], nums[2])
+        })
+        .collect::<Vec<Point3D<_>>>();
+
+    let k = lines.next().unwrap().parse::<usize>().unwrap();
+
+    let edges = (0..k)
+        .map(|_| {
+            let line = lines.next().unwrap();
+            let nums = line
+                .split_ascii_whitespace()
+                .map(|s| s.parse::<usize>().unwrap())
+                .collect::<Vec<_>>();
+            (nums[0], nums[1])
+        })
+        .collect::<Vec<(usize, usize)>>();
+
+    let mut g = vec![vec![]; n];
+
+    for (u, v) in edges {
+        g[u].push(v);
+        g[v].push(u);
+    }
+
+    let mut q = BinaryHeap::new();
+    q.push(Reverse((0, OrderedFloat(0.0_f32), 0)));
+    let mut done = vec![false; n];
+
+    while let Some(Reverse((dep, OrderedFloat(dist), cur))) = q.pop() {
+        if done[cur] {
+            continue;
+        }
+        done[cur] = true;
+
+        if cur == n - 1 {
+            eprintln!("{dist}");
+            let dist = (dist * 1000.0).round() / 1000.0;
+            eprintln!("{} {:.3}", dep, dist);
+            return Ok(format!("{} {:.3}", dep, dist));
+        }
+
+        for &next in &g[cur] {
+            if !done[next] {
+                let next_dist = dist + (pts[cur] - pts[next]).length();
+                q.push(Reverse((dep + 1, OrderedFloat(next_dist), next)));
+            }
+        }
+    }
+
+    Err(anyhow::anyhow!("no route found"))?
+}
+
 #[derive(Default)]
 struct AppState {
     day12: HashMap<String, time::Instant>,
@@ -926,6 +1017,8 @@ async fn main(#[shuttle_shared_db::Postgres] pool: PgPool) -> shuttle_axum::Shut
         .route("/20/cookie", post(day20_cookie))
         .route("/21/coords/:binary", get(day21_task1))
         .route("/21/country/:binary", get(day21_task2))
+        .route("/22/integers", post(day22_task1))
+        .route("/22/rocket", post(day22_task2))
         .with_state(TwitterState::default())
         .route("/", get(hello_world));
     Ok(router.into())
