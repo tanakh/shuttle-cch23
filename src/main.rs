@@ -1,6 +1,6 @@
 use std::{
     cmp::Reverse,
-    collections::{BinaryHeap, HashMap, VecDeque},
+    collections::{BinaryHeap, HashMap},
     fs,
     io::Cursor,
     sync::{
@@ -500,7 +500,7 @@ async fn day18_top_list(
     Ok(Json(ret))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 struct Day14 {
     content: String,
 }
@@ -533,7 +533,7 @@ async fn day14_task2(Json(input): Json<Day14>) -> String {
     )
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 struct Day15 {
     input: String,
 }
@@ -644,7 +644,7 @@ struct Tweet {
     message: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 struct TweetMessage {
     message: String,
 }
@@ -939,9 +939,9 @@ async fn day22_task2(body: String) -> Result<impl IntoResponse, AppError> {
         done[cur] = true;
 
         if cur == n - 1 {
-            eprintln!("{dist}");
+            // eprintln!("{dist}");
             let dist = (dist * 1000.0).round() / 1000.0;
-            eprintln!("{} {:.3}", dep, dist);
+            // eprintln!("{} {:.3}", dep, dist);
             return Ok(format!("{} {:.3}", dep, dist));
         }
 
@@ -968,7 +968,7 @@ struct Pool {
 
 #[shuttle_runtime::main]
 async fn main(#[shuttle_shared_db::Postgres] pool: PgPool) -> shuttle_axum::ShuttleAxum {
-    dbg!(sqlx::migrate!())
+    sqlx::migrate!()
         .run(&pool)
         .await
         .map_err(CustomError::new)?;
